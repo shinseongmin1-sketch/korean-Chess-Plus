@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="장기+ 모바일 훈수 모드 — 핸드폰 장기 앱 화면을 읽어 다음 수를 추천합니다.">
+  <title>장기+ 훈수 모드</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="advisor">
+  <header class="topbar">
+    <h1>장기<span class="plus">+</span> <small>훈수 모드</small></h1>
+    <p class="tagline">핸드폰 장기 화면을 읽어서 다음 수를 알려줘요</p>
+    <a class="nav-link" href="index.html">← 대국하러 가기</a>
+  </header>
+
+  <main class="advisor-layout">
+    <aside class="panel advisor-panel">
+      <div id="adv-status" class="status" aria-live="polite">1단계부터 차례대로 진행해 주세요</div>
+
+      <section class="step">
+        <h2><span class="num">1</span> 핸드폰 화면 연결</h2>
+        <p class="help">scrcpy로 핸드폰 화면을 노트북에 띄운 뒤, <b>화면 연결</b>을 눌러 그 창을 고르세요.</p>
+        <div class="row-buttons">
+          <button type="button" id="btn-capture" class="primary">화면 연결</button>
+          <label class="file-btn">이미지로 열기<input type="file" id="file-input" accept="image/*" hidden></label>
+        </div>
+      </section>
+
+      <section class="step">
+        <h2><span class="num">2</span> 판 위치 맞추기</h2>
+        <p class="help">버튼을 누르고 장기판의 <b>왼쪽 위 꼭짓점</b>과 <b>오른쪽 아래 꼭짓점</b>(선이 만나는 점)을 차례로 클릭하세요.</p>
+        <button type="button" id="btn-calib">판 위치 지정</button>
+      </section>
+
+      <section class="step">
+        <h2><span class="num">3</span> 말 모양 익히기</h2>
+        <p class="help">대국을 <b>시작한 직후</b> 첫 배치 화면에서 눌러주세요. 차림은 앱에서 고른 것과 같게 맞춰 주세요.</p>
+        <label class="row">화면 아래쪽 진영
+          <select id="sel-bottom">
+            <option value="c">초 (楚)</option>
+            <option value="h">한 (漢)</option>
+          </select>
+        </label>
+        <label class="row">초 차림 <select id="sel-cho"></select></label>
+        <label class="row">한 차림 <select id="sel-han"></select></label>
+        <button type="button" id="btn-learn">말 모양 익히기</button>
+      </section>
+
+      <section class="step">
+        <h2><span class="num">4</span> 훈수</h2>
+        <div class="turn-row">
+          <span>지금 차례: <b id="turn-label">초</b></span>
+          <button type="button" id="btn-turn">차례 바꾸기</button>
+        </div>
+        <label class="row">훈수 수준
+          <select id="sel-level">
+            <option value="normal">보통 (빠름)</option>
+            <option value="hard" selected>어려움</option>
+          </select>
+        </label>
+        <p id="hint-text" class="hint-text">—</p>
+      </section>
+
+      <section class="step">
+        <h2>보기 방식</h2>
+        <div class="segmented" role="radiogroup">
+          <label><input type="radio" name="view" value="side" checked> 나란히 보기</label>
+          <label><input type="radio" name="view" value="overlay"> 겹쳐 보기</label>
+        </div>
+        <label class="row overlay-only">판 투명도
+          <input type="range" id="opacity" min="0" max="90" value="35">
+        </label>
+      </section>
+
+      <p class="notice">AI 상대 연습이나 복기용으로 써주세요. 사람과 두는 온라인 대국에서 쓰면 부정행위가 되어 계정이 정지될 수 있어요.</p>
+    </aside>
+
+    <section class="advisor-stage-wrap">
+      <div class="stage-row">
+        <div id="stage" class="stage empty">
+          <video id="video" autoplay muted playsinline hidden></video>
+          <img id="image" alt="불러온 장기 화면" hidden>
+          <svg id="overlay" class="overlay" preserveAspectRatio="none"></svg>
+          <p class="stage-placeholder">핸드폰 화면이 여기에 나와요</p>
+        </div>
+        <div class="mirror-wrap" id="mirror-wrap">
+          <svg id="mirror" viewBox="0 0 560 620" role="img" aria-label="인식한 장기판"></svg>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/rules.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/board-view.js"></script>
+  <script src="js/vision.js"></script>
+  <script src="js/advisor.js"></script>
+</body>
+</html>

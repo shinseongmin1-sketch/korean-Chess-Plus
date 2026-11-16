@@ -1,153 +1,57 @@
 /*
- * 장기+ 화면 (SVG 판 그리기, 클릭 처리, AI 차례 진행)
+ * 장기+ 대국 화면 (클릭 처리, AI 차례 진행, 훈수)
  */
 (function () {
   'use strict';
 
   const J = window.Janggi;
   const AI = window.JanggiAI;
-  const NS = 'http://www.w3.org/2000/svg';
-  const CELL = 60;
-  const MARGIN = 40;
-  const PIECE_R = { K: 27, R: 23, C: 23, H: 23, E: 23, A: 18, P: 18 };
+  const BV = window.JanggiBoardView;
 
   const $ = (id) => document.getElementById(id);
   const svg = $('board');
+  const view = BV.create(svg);
 
   const state = {
     game: null,
     mode: 'ai',
     humanSide: J.CHO,
     level: 'normal',
-    flipped: false,
     selected: null,
     thinking: false,
     aiTimer: null,
+    hint: null,
   };
-
-  const layers = {};
-
-  function el(tag, attrs, parent) {
-    const node = document.createElementNS(NS, tag);
-    for (const k in attrs) node.setAttribute(k, attrs[k]);
-    if (parent) parent.appendChild(node);
-    return node;
-  }
-
-  function toScreen(i) {
-    let x = J.xOf(i);
-    let y = J.yOf(i);
-    if (state.flipped) {
-      x = 8 - x;
-      y = 9 - y;
-    }
-    return [MARGIN + x * CELL, MARGIN + y * CELL];
-  }
 
   // ---------- 판 그리기 ----------
 
-  function drawBase() {
-    const base = el('g', { class: 'base' }, svg);
-    el('rect', { x: 4, y: 4, width: 552, height: 612, rx: 14, class: 'board-bg' }, base);
-    el('rect', { x: MARGIN, y: MARGIN, width: 8 * CELL, height: 9 * CELL, class: 'board-frame' }, base);
-    for (let x = 0; x < 9; x++) {
-      el('line', { x1: MARGIN + x * CELL, y1: MARGIN, x2: MARGIN + x * CELL, y2: MARGIN + 9 * CELL, class: 'grid' }, base);
-    }
-    for (let y = 0; y < 10; y++) {
-      el('line', { x1: MARGIN, y1: MARGIN + y * CELL, x2: MARGIN + 8 * CELL, y2: MARGIN + y * CELL, class: 'grid' }, base);
-    }
-    // 궁성 대각선 (위아래 대칭이라 판을 돌려도 그대로)
-    for (const top of [0, 7]) {
-      const x1 = MARGIN + 3 * CELL;
-      const x2 = MARGIN + 5 * CELL;
-      const y1 = MARGIN + top * CELL;
-      const y2 = MARGIN + (top + 2) * CELL;
-      el('line', { x1, y1, x2, y2, class: 'grid palace' }, base);
-      el('line', { x1: x2, y1, x2: x1, y2, class: 'grid palace' }, base);
-    }
-    layers.marks = el('g', { class: 'marks' }, svg);
-    layers.pieces = el('g', { class: 'pieces' }, svg);
-    layers.hints = el('g', { class: 'hints' }, svg);
-  }
-
-  function octagon(r) {
-    const pts = [];
-    for (let k = 0; k < 8; k++) {
-      const a = ((k * 45 + 22.5) * Math.PI) / 180;
-      pts.push(`${(r * Math.cos(a)).toFixed(2)},${(r * Math.sin(a)).toFixed(2)}`);
-    }
-    return pts.join(' ');
-  }
-
-  function drawPiece(p, i, fromIdx) {
-    const r = PIECE_R[p[1]];
-    const side = p[0] === J.CHO ? 'cho' : 'han';
-    const g = el('g', { class: `piece ${side}` }, layers.pieces);
-    const [sx, sy] = toScreen(i);
-    if (fromIdx != null) {
-      const [fx, fy] = toScreen(fromIdx);
-      g.style.transition = 'none';
-      g.style.transform = `translate(${fx}px, ${fy}px)`;
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          g.style.transition = '';
-          g.style.transform = `translate(${sx}px, ${sy}px)`;
-        });
-      });
-    } else {
-      g.style.transform = `translate(${sx}px, ${sy}px)`;
-    }
-    el('polygon', { points: octagon(r), class: 'piece-body' }, g);
-    el('polygon', { points: octagon(r - 4), class: 'piece-inner' }, g);
-    const t = el('text', { class: 'piece-label', 'font-size': Math.round(r * 1.05), y: 1 }, g);
-    t.textContent = J.LABELS[p[0]][p[1]];
-    return g;
-  }
-
   function render(opts = {}) {
     const g = state.game;
-    layers.marks.textContent = '';
-    layers.pieces.textContent = '';
-    layers.hints.textContent = '';
+    view.clear();
 
-    // 마지막 수 표시
     const lm = g.lastMove;
     if (lm && !lm.pass) {
-      const [fx, fy] = toScreen(lm.from);
-      const [tx, ty] = toScreen(lm.to);
-      el('circle', { cx: fx, cy: fy, r: 10, class: 'mark-from' }, layers.marks);
-      el('circle', { cx: tx, cy: ty, r: 30, class: 'mark-to' }, layers.marks);
+      view.circle('marks', lm.from, 10, 'mark-from');
+      view.circle('marks', lm.to, 30, 'mark-to');
     }
 
-    // 장군 표시
     if (g.inCheck && !g.result) {
       const k = J.findKing(g.board, g.turn);
-      if (k >= 0) {
-        const [kx, ky] = toScreen(k);
-        el('circle', { cx: kx, cy: ky, r: 34, class: 'mark-check' }, layers.marks);
-      }
+      if (k >= 0) view.circle('marks', k, 34, 'mark-check');
     }
 
-    // 선택한 말
-    if (state.selected !== null) {
-      const [sx, sy] = toScreen(state.selected);
-      el('circle', { cx: sx, cy: sy, r: 31, class: 'mark-selected' }, layers.marks);
-    }
+    if (state.selected !== null) view.circle('marks', state.selected, 31, 'mark-selected');
 
-    // 말
-    const anim = opts.animate;
-    g.board.forEach((p, i) => {
-      if (p) drawPiece(p, i, anim && anim.to === i ? anim.from : null);
-    });
+    view.pieces(g.board, opts.animate);
 
-    // 이동 가능한 곳
     if (state.selected !== null) {
       for (const to of g.movesFrom(state.selected)) {
-        const [hx, hy] = toScreen(to);
-        if (g.board[to]) el('circle', { cx: hx, cy: hy, r: 29, class: 'hint-capture' }, layers.hints);
-        else el('circle', { cx: hx, cy: hy, r: 9, class: 'hint-move' }, layers.hints);
+        if (g.board[to]) view.circle('hints', to, 29, 'hint-capture');
+        else view.circle('hints', to, 9, 'hint-move');
       }
     }
+
+    if (state.hint) view.arrow(state.hint.from, state.hint.to);
 
     renderPanel();
   }
@@ -169,7 +73,7 @@
     if (state.thinking) return 'AI가 수를 생각하고 있어요…';
     const who = sideLabel(g.turn);
     if (g.inCheck) return `장군! ${who} 차례 — 궁을 지키세요`;
-    if (g.bikjang) return `빅장! ${who} 차례 — 풀지 않으면 무승부`;
+    if (g.bikjang) return `빅장! ${who} 차례 — 풀지 않으면 점수로 승부`;
     if (g.legal.length === 0) return `${who} 차례 — 둘 수가 없어요. 한수쉼을 눌러주세요`;
     return `${who} 차례`;
   }
@@ -201,9 +105,8 @@
       }
     }
 
-    // 플레이어 순서: 화면 아래쪽 진영을 아래에
     const players = document.querySelector('.players');
-    const bottomSide = state.flipped ? J.HAN : J.CHO;
+    const bottomSide = view.flipped ? J.HAN : J.CHO;
     players.appendChild($(`player-${J.other(bottomSide)}`));
     players.appendChild($(`player-${bottomSide}`));
 
@@ -211,6 +114,7 @@
     $('btn-undo').disabled = busy || g.history.length === 0;
     $('btn-pass').disabled = busy || !g.canPass() || !isHumanTurn();
     $('btn-resign').disabled = busy || !!g.result;
+    $('btn-hint').disabled = busy || !!g.result || !isHumanTurn() || g.legal.length === 0;
 
     const log = $('log');
     log.textContent = '';
@@ -232,24 +136,6 @@
 
   // ---------- 조작 ----------
 
-  function squareFromEvent(e) {
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
-    let gx = Math.round((p.x - MARGIN) / CELL);
-    let gy = Math.round((p.y - MARGIN) / CELL);
-    if (gx < 0 || gx > 8 || gy < 0 || gy > 9) return null;
-    const dx = p.x - (MARGIN + gx * CELL);
-    const dy = p.y - (MARGIN + gy * CELL);
-    if (dx * dx + dy * dy > (CELL * 0.5) ** 2) return null;
-    if (state.flipped) {
-      gx = 8 - gx;
-      gy = 9 - gy;
-    }
-    return J.idx(gx, gy);
-  }
-
   function onSquare(i) {
     const g = state.game;
     if (state.thinking || g.result || !isHumanTurn()) return;
@@ -269,6 +155,7 @@
   function doMove(from, to) {
     state.game.move(from, to);
     state.selected = null;
+    state.hint = null;
     render({ animate: { from, to } });
     maybeAI();
   }
@@ -298,6 +185,21 @@
     state.thinking = false;
   }
 
+  function showHint() {
+    const g = state.game;
+    if (state.thinking || g.result || !isHumanTurn()) return;
+    state.thinking = true;
+    renderPanel();
+    setTimeout(() => {
+      // 훈수는 항상 '어려움' 수준으로 계산
+      const mv = AI.bestMove(g.board, g.turn, 'hard', g.bikjang);
+      state.thinking = false;
+      state.hint = mv;
+      state.selected = mv ? mv.from : null;
+      render();
+    }, 30);
+  }
+
   function undo() {
     const g = state.game;
     if (state.thinking) return;
@@ -308,6 +210,7 @@
       g.undo();
     }
     state.selected = null;
+    state.hint = null;
     render();
     maybeAI();
   }
@@ -317,8 +220,9 @@
     state.mode = opts.mode;
     state.humanSide = opts.side;
     state.level = opts.level;
-    state.flipped = opts.mode === 'ai' && opts.side === J.HAN;
+    view.flipped = opts.mode === 'ai' && opts.side === J.HAN;
     state.selected = null;
+    state.hint = null;
     state.game = new J.Game({ choSetup: opts.choSetup, hanSetup: opts.hanSetup });
     render();
     maybeAI();
@@ -369,25 +273,26 @@
 
   // ---------- 시작 ----------
 
-  drawBase();
   fillSetups();
   svg.addEventListener('click', (e) => {
-    const i = squareFromEvent(e);
+    const i = view.squareFromEvent(e);
     if (i !== null) onSquare(i);
   });
   $('btn-new').addEventListener('click', openDialog);
   $('banner-new').addEventListener('click', openDialog);
   $('btn-undo').addEventListener('click', undo);
+  $('btn-hint').addEventListener('click', showHint);
   $('btn-pass').addEventListener('click', () => {
     if (state.thinking || !isHumanTurn()) return;
     if (state.game.pass()) {
       state.selected = null;
+      state.hint = null;
       render();
       maybeAI();
     }
   });
   $('btn-flip').addEventListener('click', () => {
-    state.flipped = !state.flipped;
+    view.flipped = !view.flipped;
     render();
   });
   $('btn-resign').addEventListener('click', () => {
@@ -397,6 +302,7 @@
     if (!confirm(`${J.SIDE_NAMES[side]}이(가) 기권할까요?`)) return;
     g.resign(side);
     state.selected = null;
+    state.hint = null;
     render();
   });
 
