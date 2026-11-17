@@ -28,27 +28,35 @@
       </section>
 
       <section class="step">
-        <h2><span class="num">2</span> 판 위치 맞추기</h2>
-        <p class="help">버튼을 누르고 장기판의 <b>왼쪽 위 꼭짓점</b>과 <b>오른쪽 아래 꼭짓점</b>(선이 만나는 점)을 차례로 클릭하세요.</p>
-        <button type="button" id="btn-calib">판 위치 지정</button>
+        <h2><span class="num">2</span> 자동 인식</h2>
+        <p class="help">장기판과 말을 자동으로 찾아요. 처음 한 번은 <b>새 대국의 첫 배치 화면</b>이 보여야 말 모양을 익힐 수 있어요. 익힌 모양은 저장돼서 다음엔 대국 중간에도 바로 읽어요.</p>
+        <dl class="detect-info">
+          <dt>장기판</dt><dd id="info-grid">—</dd>
+          <dt>말 모양</dt><dd id="info-model">—</dd>
+          <dt>아래쪽 진영</dt><dd id="info-bottom">—</dd>
+          <dt>차림</dt><dd id="info-setup">—</dd>
+        </dl>
+        <button type="button" id="btn-reset">처음부터 다시 인식</button>
+
+        <details class="manual">
+          <summary>직접 맞추기 (자동 인식이 안 될 때)</summary>
+          <p class="help">판 위치: 버튼을 누르고 장기판의 <b>왼쪽 위</b>와 <b>오른쪽 아래</b> 꼭짓점(선이 만나는 점)을 차례로 클릭하세요.</p>
+          <button type="button" id="btn-calib">판 위치 직접 지정</button>
+          <p class="help">말 모양: 첫 배치 화면에서 진영과 차림을 앱과 같게 고르고 누르세요.</p>
+          <label class="row">화면 아래쪽 진영
+            <select id="sel-bottom">
+              <option value="c">초 (楚)</option>
+              <option value="h">한 (漢)</option>
+            </select>
+          </label>
+          <label class="row">초 차림 <select id="sel-cho"></select></label>
+          <label class="row">한 차림 <select id="sel-han"></select></label>
+          <button type="button" id="btn-learn">말 모양 직접 익히기</button>
+        </details>
       </section>
 
       <section class="step">
-        <h2><span class="num">3</span> 말 모양 익히기</h2>
-        <p class="help">대국을 <b>시작한 직후</b> 첫 배치 화면에서 눌러주세요. 차림은 앱에서 고른 것과 같게 맞춰 주세요.</p>
-        <label class="row">화면 아래쪽 진영
-          <select id="sel-bottom">
-            <option value="c">초 (楚)</option>
-            <option value="h">한 (漢)</option>
-          </select>
-        </label>
-        <label class="row">초 차림 <select id="sel-cho"></select></label>
-        <label class="row">한 차림 <select id="sel-han"></select></label>
-        <button type="button" id="btn-learn">말 모양 익히기</button>
-      </section>
-
-      <section class="step">
-        <h2><span class="num">4</span> 훈수</h2>
+        <h2><span class="num">3</span> 훈수</h2>
         <div class="turn-row">
           <span>지금 차례: <b id="turn-label">초</b></span>
           <button type="button" id="btn-turn">차례 바꾸기</button>

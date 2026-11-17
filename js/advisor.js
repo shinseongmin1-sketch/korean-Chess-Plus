@@ -1,6 +1,7 @@
 /*
  * 장기+ 훈수 모드
- * 화면 공유(또는 이미지)로 받은 장기 앱 화면을 읽고, 추천 수를 화살표로 보여준다.
+ * 화면 공유(또는 이미지)로 받은 장기 앱 화면에서 판과 말을 자동으로 읽고,
+ * 추천 수를 화살표로 보여준다.
  */
 (function () {
   'use strict';
@@ -9,7 +10,7 @@
   const AI = window.JanggiAI;
   const BV = window.JanggiBoardView;
   const V = window.JanggiVision;
-  const STORE_KEY = 'janggi-plus-advisor-v1';
+  const STORE_KEY = 'janggi-plus-advisor-v2';
 
   const $ = (id) => document.getElementById(id);
   const stage = $('stage');
@@ -21,9 +22,11 @@
   const state = {
     src: null, // { kind, el, w, h }
     calib: null,
+    calibManual: false,
     calibStep: null, // 'tl' | 'br'
     calibTmp: null,
     model: null,
+    confirmed: { c: false, h: false }, // 마·상 구분을 실제 움직임으로 확인했는지
     bottom: J.CHO,
     choSetup: J.SETUPS[0],
     hanSetup: J.SETUPS[0],
@@ -31,6 +34,8 @@
     boardKey: '',
     candKey: '',
     candCount: 0,
+    failCount: 0,
+    tick: 0,
     lastMove: null,
     turn: J.CHO,
     hint: null,
@@ -40,6 +45,7 @@
     opacity: 0.35,
     timer: null,
     warn: '',
+    notice: '',
   };
 
   // ---------- 저장 / 불러오기 ----------
@@ -47,13 +53,11 @@
   function save() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        calib: state.calib,
-        srcW: state.src ? state.src.w : null,
-        srcH: state.src ? state.src.h : null,
         bottom: state.bottom,
         choSetup: state.choSetup,
         hanSetup: state.hanSetup,
         model: state.model ? V.serializeModel(state.model) : null,
+        confirmed: state.confirmed,
         viewMode: state.viewMode,
         opacity: state.opacity,
         level: state.level,
@@ -61,8 +65,8 @@
     } catch (e) { /* 저장할 수 없는 환경이면 무시 */ }
   }
 
-  let saved = null;
   function load() {
+    let saved = null;
     try {
       saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
     } catch (e) {
@@ -76,6 +80,7 @@
     state.opacity = typeof saved.opacity === 'number' ? saved.opacity : 0.35;
     state.level = saved.level || 'hard';
     if (saved.model) state.model = V.deserializeModel(saved.model);
+    if (saved.confirmed) state.confirmed = saved.confirmed;
   }
 
   // ---------- 상태 표시 ----------
@@ -90,33 +95,61 @@
     if (!state.src) return setStatus('1단계: 핸드폰 화면을 연결해 주세요');
     if (state.calibStep === 'tl') return setStatus('장기판 왼쪽 위 꼭짓점(선이 만나는 점)을 클릭하세요', 'turn-han');
     if (state.calibStep === 'br') return setStatus('이제 오른쪽 아래 꼭짓점을 클릭하세요', 'turn-han');
-    if (!state.calib) return setStatus('2단계: 판 위치를 지정해 주세요');
-    if (!state.model) return setStatus('3단계: 첫 배치 화면에서 말 모양을 익혀 주세요');
+    if (state.notice) return setStatus(state.notice, 'turn-cho');
+    if (!state.calib) return setStatus('장기판을 찾고 있어요… 장기 앱 화면이 보이게 해주세요');
+    if (!state.model) return setStatus('새 대국을 시작해 주세요. 첫 배치 화면에서 말 모양을 자동으로 익혀요');
     if (state.warn) return setStatus(`판을 읽는 중… (${state.warn})`, 'check');
     if (!state.board) return setStatus('판을 읽는 중…');
     return setStatus(`인식 중 — ${J.SIDE_NAMES[state.turn]} 차례`, state.turn === J.CHO ? 'turn-cho' : 'turn-han');
   }
 
+  // 잠깐 보여줄 안내 (몇 초 뒤 원래 상태 표시로 돌아감)
+  let noticeTimer = null;
+  function notify(text) {
+    state.notice = text;
+    guide();
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      state.notice = '';
+      guide();
+    }, 4000);
+  }
+
+  function setInfo(id, text, ok) {
+    const d = $(id);
+    d.textContent = text;
+    d.className = ok ? 'ok' : 'wait';
+  }
+
+  function renderInfo() {
+    setInfo('info-grid', state.calib ? (state.calibManual ? '직접 지정함' : '찾음') : '찾는 중…', !!state.calib);
+    setInfo('info-model', state.model ? '익힘' : '첫 배치 화면을 기다리는 중', !!state.model);
+    setInfo('info-bottom', state.model ? J.SIDE_NAMES[state.bottom] : '—', !!state.model);
+    const mark = (side) => (state.confirmed[side] ? '' : '?');
+    setInfo('info-setup', state.model
+      ? `초 ${state.choSetup}${mark(J.CHO)} · 한 ${state.hanSetup}${mark(J.HAN)}`
+      : '—', !!state.model);
+    $('sel-bottom').value = state.bottom;
+    $('sel-cho').value = state.choSetup;
+    $('sel-han').value = state.hanSetup;
+  }
+
   // ---------- 화면 소스 ----------
 
   function setSource(kind, el, w, h) {
-    const prev = state.src;
+    const sameSize = state.src && state.src.w === w && state.src.h === h;
     state.src = { kind, el, w, h };
     video.hidden = kind !== 'video';
     image.hidden = kind !== 'image';
     stage.classList.remove('empty');
     overlay.setAttribute('viewBox', `0 0 ${w} ${h}`);
-
-    // 저장된 판 위치를 화면 크기에 맞게 불러오기
-    const ref = prev || (saved && saved.calib && saved.srcW ? { w: saved.srcW, h: saved.srcH, calib: saved.calib } : null);
-    const calib = prev ? state.calib : ref && ref.calib;
-    if (calib && ref) {
-      const sx = w / ref.w;
-      const sy = h / ref.h;
-      state.calib = { x1: calib.x1 * sx, y1: calib.y1 * sy, x2: calib.x2 * sx, y2: calib.y2 * sy };
+    if (!sameSize) {
+      state.calib = null;
+      state.calibManual = false;
     }
     state.boardKey = '';
     state.candKey = '';
+    state.failCount = 0;
     startLoop();
     renderAll();
   }
@@ -156,27 +189,44 @@
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
+  // 영상 크기가 바뀌었으면 판 위치도 같은 비율로 옮긴다
+  function syncVideoSize() {
+    const src = state.src;
+    if (!src || src.kind !== 'video') return true;
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) return false;
+    if (w !== src.w || h !== src.h) {
+      if (state.calib) {
+        const sx = w / src.w;
+        const sy = h / src.h;
+        const c = state.calib;
+        state.calib = { x1: c.x1 * sx, y1: c.y1 * sy, x2: c.x2 * sx, y2: c.y2 * sy };
+      }
+      src.w = w;
+      src.h = h;
+      overlay.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    }
+    return true;
+  }
+
+  // 화면 전체 (판 찾기용, 너무 크면 줄여서)
+  function grabFull() {
+    const src = state.src;
+    if (!src || !syncVideoSize()) return null;
+    const scale = Math.min(1, 1600 / Math.max(src.w, src.h));
+    const w = Math.round(src.w * scale);
+    const h = Math.round(src.h * scale);
+    canvas.width = w;
+    canvas.height = h;
+    ctx.drawImage(src.el, 0, 0, w, h);
+    return { img: ctx.getImageData(0, 0, w, h), scale };
+  }
+
   // 판 주변만 잘라서 읽는다 (빠르게)
   function grab() {
     const src = state.src;
-    if (!src) return null;
-    if (src.kind === 'video') {
-      const w = video.videoWidth;
-      const h = video.videoHeight;
-      if (!w || !h) return null;
-      if (w !== src.w || h !== src.h) {
-        // 창 크기가 바뀌면 판 위치도 같은 비율로 옮긴다
-        if (state.calib) {
-          const sx = w / src.w;
-          const sy = h / src.h;
-          const c = state.calib;
-          state.calib = { x1: c.x1 * sx, y1: c.y1 * sy, x2: c.x2 * sx, y2: c.y2 * sy };
-        }
-        src.w = w;
-        src.h = h;
-        overlay.setAttribute('viewBox', `0 0 ${w} ${h}`);
-      }
-    }
+    if (!src || !state.calib || !syncVideoSize()) return null;
     const c = state.calib;
     const [cw, ch] = V.cellSize(c);
     const left = Math.max(0, Math.floor(c.x1 - cw));
@@ -194,24 +244,101 @@
     };
   }
 
+  function autoGrid() {
+    const f = grabFull();
+    if (!f) return false;
+    const g = V.detectGrid(f.img);
+    if (!g) return false;
+    const s = f.scale;
+    state.calib = { x1: g.x1 / s, y1: g.y1 / s, x2: g.x2 / s, y2: g.y2 / s };
+    state.calibManual = false;
+    state.boardKey = '';
+    renderAll();
+    return true;
+  }
+
+  const boardKeyOf = (b) => b.map((p) => p || '').join(',');
+
+  function startKey() {
+    return boardKeyOf(J.initialBoard(state.choSetup, state.hanSetup));
+  }
+
+  function learnFrom(f, bottom, choSetup, hanSetup) {
+    state.bottom = bottom;
+    state.choSetup = choSetup;
+    state.hanSetup = hanSetup;
+    state.model = V.learn(f.img, f.calib, bottom, choSetup, hanSetup);
+    state.board = null;
+    state.boardKey = '';
+    state.lastMove = null;
+    state.turn = J.CHO;
+    save();
+    accept(J.initialBoard(choSetup, hanSetup));
+  }
+
+  function autoLearn(f) {
+    const bottom = V.detectBottom(f.img, f.calib);
+    const s = V.detectSetups(f.img, f.calib, bottom);
+    state.confirmed = { c: false, h: false };
+    learnFrom(f, bottom, s.choSetup, s.hanSetup);
+    notify(`말 모양을 익혔어요! 아래쪽은 ${J.SIDE_NAMES[bottom]}이에요. 대국을 진행하세요`);
+  }
+
   function process() {
-    if (!state.src || !state.calib || !state.model || state.calibStep) return;
+    if (!state.src || state.calibStep) return;
+    state.tick++;
+
+    if (!state.calib) {
+      // 판 찾기는 무거워서 영상일 때는 1초에 한 번만
+      if (state.src.kind === 'video' && state.tick % 2) return;
+      if (!autoGrid()) {
+        guide();
+        return;
+      }
+    }
+
     const f = grab();
     if (!f) return;
+    const start = V.isStartPosition(f.img, f.calib);
+
+    if (!state.model) {
+      if (start) autoLearn(f);
+      else guide();
+      return;
+    }
+
     const r = V.read(f.img, f.calib, state.bottom, state.model);
+    const key = boardKeyOf(r.board);
+
+    // 새 대국의 첫 배치인데 지금 익힌 모양으로 읽은 결과가 첫 배치가 아니면 (차림이나 진영이 바뀜) 다시 익힌다
+    if (start && key !== startKey()) {
+      const ok = V.validate(r.board) === null;
+      const isAnyStart = ok && J.SETUPS.some((a) => J.SETUPS.some((b) => key === boardKeyOf(J.initialBoard(a, b))));
+      if (!isAnyStart) {
+        autoLearn(f);
+        return;
+      }
+    }
+
     const err = V.validate(r.board);
     if (err) {
+      state.failCount++;
       if (state.warn !== err) {
         state.warn = err;
         guide();
       }
+      // 계속 못 읽으면 판 위치를 다시 찾아본다 (창을 옮겼거나 크기를 바꾼 경우)
+      if (!state.calibManual && state.failCount % 10 === 0) {
+        state.calib = null;
+        renderAll();
+      }
       return;
     }
+    state.failCount = 0;
     if (state.warn) {
       state.warn = '';
       guide();
     }
-    const key = r.board.join(',');
     if (key === state.boardKey) {
       state.candKey = '';
       return;
@@ -225,26 +352,76 @@
     if (state.candCount >= (state.src.kind === 'image' ? 1 : 2)) accept(r.board);
   }
 
+  // 마·상이 실제로 움직인 모양을 보고 이름표가 맞는지 확인한다. 고친 진영 목록을 돌려준다
+  function checkHorseElephant(piece, from, to) {
+    const side = piece[0];
+    const ax = Math.abs(J.xOf(to) - J.xOf(from));
+    const ay = Math.abs(J.yOf(to) - J.yOf(from));
+    const horseMove = (ax === 1 && ay === 2) || (ax === 2 && ay === 1);
+    const elephantMove = (ax === 2 && ay === 3) || (ax === 3 && ay === 2);
+    if (!horseMove && !elephantMove) return null;
+    const wrong = (piece[1] === 'H' && elephantMove) || (piece[1] === 'E' && horseMove);
+    if (!wrong) {
+      if (!state.confirmed[side]) {
+        state.confirmed[side] = true;
+        save();
+      }
+      return null;
+    }
+    const sides = [side];
+    const other = J.other(side);
+    if (!state.confirmed[other]) sides.push(other); // 두 진영을 함께 판단했으므로 같이 고친다
+    const flip = (s) => s.replace(/마|상/g, (m) => (m === '마' ? '상' : '마'));
+    for (const s of sides) {
+      V.swapHorseElephant(state.model, s);
+      if (s === J.CHO) state.choSetup = flip(state.choSetup);
+      else state.hanSetup = flip(state.hanSetup);
+    }
+    state.confirmed[side] = true;
+    save();
+    notify('마와 상을 바꿔서 알아봤었네요. 움직임을 보고 고쳤어요');
+    return sides;
+  }
+
+  function swapBoardLabels(board, sides) {
+    return board.map((p) => {
+      if (!p || !sides.includes(p[0])) return p;
+      if (p[1] === 'H') return p[0] + 'E';
+      if (p[1] === 'E') return p[0] + 'H';
+      return p;
+    });
+  }
+
   function accept(board) {
     const prev = state.board;
-    if (prev) {
+    const key = boardKeyOf(board);
+    const isStart = J.SETUPS.some((a) => J.SETUPS.some((b) => key === boardKeyOf(J.initialBoard(a, b))));
+    if (isStart) {
+      state.turn = J.CHO;
+      state.lastMove = null;
+    } else if (prev) {
       const changed = [];
       for (let i = 0; i < 90; i++) if (prev[i] !== board[i]) changed.push(i);
       // 한 수 움직임: 빈칸이 된 곳(출발)과 새로 말이 생긴 곳(도착)
       const from = changed.filter((i) => prev[i] && !board[i]);
       const to = changed.filter((i) => board[i] && prev[i] !== board[i]);
       if (changed.length <= 2 && from.length === 1 && to.length === 1 && prev[from[0]] === board[to[0]]) {
-        const mover = board[to[0]][0];
-        state.turn = J.other(mover);
+        const piece = board[to[0]];
+        state.turn = J.other(piece[0]);
         state.lastMove = { from: from[0], to: to[0] };
+        if (piece[1] === 'H' || piece[1] === 'E') {
+          const swapped = checkHorseElephant(piece, from[0], to[0]);
+          if (swapped) board = swapBoardLabels(board, swapped);
+        }
       } else {
         state.lastMove = null;
       }
     }
     state.board = board;
-    state.boardKey = board.join(',');
+    state.boardKey = boardKeyOf(board);
     state.candKey = '';
     computeHint();
+    renderInfo();
     guide();
   }
 
@@ -256,11 +433,9 @@
     $('hint-text').textContent = '수를 계산하고 있어요…';
     setTimeout(() => {
       if (token !== state.hintToken) return;
-      const board = state.board;
-      const turn = state.turn;
-      const mv = AI.bestMove(board, turn, state.level, false);
+      const mv = AI.bestMove(state.board, state.turn, state.level, false);
       if (token !== state.hintToken) return;
-      state.hint = mv ? { from: mv.from, to: mv.to, side: turn } : null;
+      state.hint = mv ? { from: mv.from, to: mv.to, side: state.turn } : null;
       renderAll();
     }, 30);
   }
@@ -383,6 +558,7 @@
   function renderAll() {
     renderOverlay();
     renderMirror();
+    renderInfo();
     $('turn-label').textContent = J.SIDE_NAMES[state.turn];
     $('turn-label').className = state.turn === J.CHO ? 'cho-text' : 'han-text';
     $('hint-text').textContent = hintText();
@@ -412,11 +588,11 @@
         return;
       }
       state.calib = { x1: a.x, y1: a.y, x2: p.x, y2: p.y };
+      state.calibManual = true;
       state.calibStep = null;
       state.calibTmp = null;
       stage.classList.remove('calibrating');
       state.boardKey = '';
-      save();
       process();
     }
     renderAll();
@@ -424,6 +600,19 @@
 
   $('btn-capture').addEventListener('click', startCapture);
   $('file-input').addEventListener('change', (e) => openImage(e.target.files[0]));
+
+  $('btn-reset').addEventListener('click', () => {
+    state.calib = null;
+    state.calibManual = false;
+    state.model = null;
+    state.board = null;
+    state.boardKey = '';
+    state.hint = null;
+    state.confirmed = { c: false, h: false };
+    save();
+    renderAll();
+    process();
+  });
 
   $('btn-calib').addEventListener('click', () => {
     if (!state.src) {
@@ -438,22 +627,15 @@
 
   $('btn-learn').addEventListener('click', () => {
     if (!state.src || !state.calib) {
-      setStatus('화면 연결과 판 위치 지정을 먼저 해주세요', 'check');
+      setStatus('화면 연결과 판 위치를 먼저 맞춰 주세요', 'check');
       return;
     }
-    state.bottom = $('sel-bottom').value;
-    state.choSetup = $('sel-cho').value;
-    state.hanSetup = $('sel-han').value;
     const f = grab();
     if (!f) return;
-    state.model = V.learn(f.img, f.calib, state.bottom, state.choSetup, state.hanSetup);
-    state.board = null;
-    state.boardKey = '';
-    state.lastMove = null;
-    state.turn = J.CHO;
-    save();
-    accept(J.initialBoard(state.choSetup, state.hanSetup));
-    setStatus('말 모양을 익혔어요! 이제 대국을 진행하면 훈수가 나와요', 'turn-cho');
+    // 직접 고른 차림은 사람이 확인한 것이므로 확정으로 본다
+    state.confirmed = { c: true, h: true };
+    learnFrom(f, $('sel-bottom').value, $('sel-cho').value, $('sel-han').value);
+    notify('말 모양을 익혔어요! 이제 대국을 진행하면 훈수가 나와요');
   });
 
   $('btn-turn').addEventListener('click', () => {
@@ -465,15 +647,6 @@
     state.level = e.target.value;
     save();
     computeHint();
-  });
-
-  $('sel-bottom').addEventListener('change', (e) => {
-    // 이미 익힌 상태라면 방향만 바꿔서 다시 읽는다
-    state.bottom = e.target.value;
-    state.boardKey = '';
-    save();
-    process();
-    renderAll();
   });
 
   document.querySelectorAll('input[name="view"]').forEach((r) => {
@@ -492,20 +665,18 @@
 
   // ---------- 시작 ----------
 
-  function fillSelect(sel, value) {
+  function fillSelect(sel) {
     J.SETUPS.forEach((s) => {
       const o = document.createElement('option');
       o.value = s;
       o.textContent = s;
       sel.appendChild(o);
     });
-    sel.value = value;
   }
 
   load();
-  fillSelect($('sel-cho'), state.choSetup);
-  fillSelect($('sel-han'), state.hanSetup);
-  $('sel-bottom').value = state.bottom;
+  fillSelect($('sel-cho'));
+  fillSelect($('sel-han'));
   $('sel-level').value = state.level;
   $('opacity').value = Math.round(state.opacity * 100);
   document.querySelector(`input[name="view"][value="${state.viewMode}"]`).checked = true;
