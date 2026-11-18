@@ -312,6 +312,11 @@ select {
 }
 .arrow-head { fill: #ff8f00; }
 .arrow-from { fill: rgba(255, 143, 0, 0.18); stroke: #ff8f00; stroke-width: 3; pointer-events: none; }
+.arrow-line.threat { stroke: #e53935; stroke-dasharray: 14 10; opacity: 0.85; }
+.arrow-head.threat { fill: #e53935; }
+.arrow-from.threat { fill: rgba(229, 57, 53, 0.14); stroke: #e53935; }
+.hint-text.threat { border-color: #e53935; color: #c62828; }
+.hint-text.mine { border-style: solid; }
 
 /* ---------- 훈수 모드 페이지 ---------- */
 

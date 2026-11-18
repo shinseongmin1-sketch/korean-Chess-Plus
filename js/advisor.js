@@ -40,7 +40,7 @@
     turn: J.CHO,
     hint: null,
     hintToken: 0,
-    level: 'hard',
+    level: 'max',
     viewMode: 'side',
     opacity: 0.35,
     timer: null,
@@ -78,7 +78,7 @@
     state.hanSetup = saved.hanSetup || J.SETUPS[0];
     state.viewMode = saved.viewMode || 'side';
     state.opacity = typeof saved.opacity === 'number' ? saved.opacity : 0.35;
-    state.level = saved.level || 'hard';
+    state.level = saved.level && saved.level !== 'hard' ? saved.level : 'max';
     if (saved.model) state.model = V.deserializeModel(saved.model);
     if (saved.confirmed) state.confirmed = saved.confirmed;
   }
@@ -425,40 +425,108 @@
     guide();
   }
 
+  // ---------- AI 계산 (가능하면 워커에서, 화면이 멈추지 않게) ----------
+
+  let worker = null;
+  let workerBusy = false;
+  let workerOk = true;
+  let pending = null;
+
+  function makeWorker() {
+    if (!workerOk || typeof Worker === 'undefined') return null;
+    try {
+      const w = new Worker('js/ai-worker.js');
+      w.onmessage = (e) => {
+        workerBusy = false;
+        if (pending && pending.id === e.data.id) {
+          const p = pending;
+          pending = null;
+          p.resolve(e.data.mv);
+        }
+      };
+      w.onerror = () => {
+        // 워커를 못 쓰는 환경(파일로 직접 연 경우 등)이면 화면에서 바로 계산
+        workerOk = false;
+        worker = null;
+        workerBusy = false;
+        if (pending) {
+          const p = pending;
+          pending = null;
+          p.resolve(AI.bestMove(p.board, p.side, p.level, false));
+        }
+      };
+      return w;
+    } catch (e) {
+      workerOk = false;
+      return null;
+    }
+  }
+
+  let askSeq = 0;
+  function askAI(board, side, level) {
+    return new Promise((resolve) => {
+      if (workerOk) {
+        // 이전 계산이 아직 돌고 있으면 버리고 새로 시작
+        if (worker && workerBusy) {
+          worker.terminate();
+          worker = null;
+        }
+        if (!worker) worker = makeWorker();
+      }
+      if (!worker) {
+        setTimeout(() => resolve(AI.bestMove(board, side, level, false)), 30);
+        return;
+      }
+      const id = ++askSeq;
+      pending = { id, resolve, board, side, level };
+      workerBusy = true;
+      worker.postMessage({ id, board, side, level, bikjang: false });
+    });
+  }
+
   function computeHint() {
     state.hint = null;
     renderAll();
     if (!state.board) return;
     const token = ++state.hintToken;
-    $('hint-text').textContent = '수를 계산하고 있어요…';
-    setTimeout(() => {
+    const turn = state.turn;
+    const mine = turn === state.bottom;
+    if (J.legalMoves(state.board, turn).length === 0) return;
+    // 내 차례에는 고른 수준으로, 상대 차례에는 빠르게 예상 수만
+    askAI(state.board.slice(), turn, mine ? state.level : 'normal').then((mv) => {
       if (token !== state.hintToken) return;
-      const mv = AI.bestMove(state.board, state.turn, state.level, false);
-      if (token !== state.hintToken) return;
-      state.hint = mv ? { from: mv.from, to: mv.to, side: state.turn } : null;
+      state.hint = mv ? { from: mv.from, to: mv.to, side: turn, mine } : null;
       renderAll();
-    }, 30);
+    });
   }
 
   function hintText() {
     if (!state.board) return '—';
     const turn = state.turn;
+    const mine = turn === state.bottom;
     if (!state.hint) {
       if (J.legalMoves(state.board, turn).length === 0) {
-        return J.isInCheck(state.board, turn)
-          ? `${J.SIDE_NAMES[turn]}은(는) 외통수에 걸렸어요`
-          : `${J.SIDE_NAMES[turn]}은(는) 둘 수 있는 수가 없어요 (한수쉼)`;
+        if (J.isInCheck(state.board, turn)) return mine ? '외통수에 걸렸어요 😢' : '상대가 외통수에 걸렸어요! 승리 🎉';
+        return mine ? '둘 수 있는 수가 없어요. 한수쉼 하세요' : '상대는 둘 수 있는 수가 없어요';
       }
-      return '수를 계산하고 있어요…';
+      return mine ? '최선의 수를 계산하고 있어요…' : '상대 차례 — 예상 수를 계산하고 있어요…';
     }
     const { from, to } = state.hint;
     const p = state.board[from];
     const cap = state.board[to];
-    let t = `${J.SIDE_NAMES[turn]} 추천: ${J.NAMES[p[0]][p[1]]}(${J.LABELS[p[0]][p[1]]}) ${J.coord(from)} → ${J.coord(to)}`;
-    if (cap) t += ` · ${J.NAMES[cap[0]][cap[1]]} 잡기`;
     const after = J.applyMove(state.board, from, to);
-    if (J.isInCheck(after, J.other(turn))) t += ' · 장군!';
-    if (J.isInCheck(state.board, turn)) t = `장군 받는 중! ${t}`;
+    let t = `${J.NAMES[p[0]][p[1]]}(${J.LABELS[p[0]][p[1]]}) ${J.coord(from)} → ${J.coord(to)}`;
+    if (cap) t += ` · ${J.NAMES[cap[0]][cap[1]]} 잡기`;
+    if (mine) {
+      t = `내 추천: ${t}`;
+      if (J.isInCheck(after, J.other(turn))) {
+        t += J.legalMoves(after, J.other(turn)).length === 0 ? ' · 외통수! 🎉' : ' · 장군!';
+      }
+      if (J.isInCheck(state.board, turn)) t = `장군 받는 중! ${t}`;
+    } else {
+      t = `상대 예상 수: ${t}`;
+      if (J.isInCheck(after, turn)) t += ' · 장군 조심!';
+    }
     return t;
   }
 
@@ -476,6 +544,7 @@
 
   const el = BV.el;
   const overlayMarker = BV.arrowMarker(overlay, 'arrow-head');
+  const overlayThreatMarker = BV.arrowMarker(overlay, 'arrow-head threat');
   const dyn = el('g', {}, overlay);
 
   function pt(i) {
@@ -534,9 +603,15 @@
     if (state.hint) {
       const [x1, y1] = pt(state.hint.from);
       const [x2, y2] = pt(state.hint.to);
-      el('circle', { cx: x1, cy: y1, r: Math.min(cw, ch) * 0.5, class: 'arrow-from', 'stroke-width': cw * 0.06 }, dyn);
-      const line = BV.arrow(dyn, x1, y1, x2, y2, overlayMarker, 'arrow-line', Math.min(cw, ch) * 0.3);
+      const threat = !state.hint.mine;
+      el('circle', {
+        cx: x1, cy: y1, r: Math.min(cw, ch) * 0.5,
+        class: threat ? 'arrow-from threat' : 'arrow-from', 'stroke-width': cw * 0.06,
+      }, dyn);
+      const line = BV.arrow(dyn, x1, y1, x2, y2, threat ? overlayThreatMarker : overlayMarker,
+        threat ? 'arrow-line threat' : 'arrow-line', Math.min(cw, ch) * 0.3);
       line.style.strokeWidth = `${Math.max(3, cw * 0.13)}px`;
+      if (threat) line.style.strokeDasharray = `${cw * 0.25} ${cw * 0.18}`;
     }
   }
 
@@ -552,7 +627,7 @@
     const k = J.findKing(state.board, state.turn);
     if (k >= 0 && J.isInCheck(state.board, state.turn)) v.circle('marks', k, 34, 'mark-check');
     v.pieces(state.board);
-    if (state.hint) v.arrow(state.hint.from, state.hint.to);
+    if (state.hint) v.arrow(state.hint.from, state.hint.to, state.hint.mine ? 'best' : 'threat');
   }
 
   function renderAll() {
@@ -562,6 +637,8 @@
     $('turn-label').textContent = J.SIDE_NAMES[state.turn];
     $('turn-label').className = state.turn === J.CHO ? 'cho-text' : 'han-text';
     $('hint-text').textContent = hintText();
+    const mineTurn = state.board && state.turn === state.bottom;
+    $('hint-text').className = `hint-text ${state.board ? (mineTurn ? 'mine' : 'threat') : ''}`;
     document.body.classList.toggle('mode-overlay', state.viewMode === 'overlay');
     guide();
   }

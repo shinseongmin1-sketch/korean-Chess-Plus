@@ -91,6 +91,7 @@
       arrows: el('g', { class: 'arrows' }, svg),
     };
     const markerId = arrowMarker(svg, 'arrow-head');
+    const threatMarkerId = arrowMarker(svg, 'arrow-head threat');
     view.layers = layers;
 
     view.toScreen = (i) => {
@@ -137,11 +138,14 @@
       });
     };
 
-    view.arrow = (from, to) => {
+    // kind: 'best' 추천 수(주황), 'threat' 상대 예상 수(빨강 점선)
+    view.arrow = (from, to, kind) => {
       const [x1, y1] = view.toScreen(from);
       const [x2, y2] = view.toScreen(to);
-      el('circle', { cx: x1, cy: y1, r: 31, class: 'arrow-from' }, layers.arrows);
-      arrow(layers.arrows, x1, y1, x2, y2, markerId, 'arrow-line', 20);
+      const threat = kind === 'threat';
+      el('circle', { cx: x1, cy: y1, r: 31, class: threat ? 'arrow-from threat' : 'arrow-from' }, layers.arrows);
+      arrow(layers.arrows, x1, y1, x2, y2, threat ? threatMarkerId : markerId,
+        threat ? 'arrow-line threat' : 'arrow-line', 20);
     };
 
     view.squareFromEvent = (e) => {
